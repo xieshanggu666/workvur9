@@ -191,3 +191,100 @@ button.mini { font-size: 12px; padding: 4px 8px; }
 .shopdesc { color: #99a; font-size: 13px; text-align: left; }
 .shoptx { text-align: left; margin-top: 12px; }
 .shoptx ul { margin: 6px 0 0; padding-left: 18px; color: #99a; font-size: 12px; display: flex; flex-direction: column; gap: 4px; }
+/* ============ 整局可交互回放 ============ */
+.replay-overlay-full { z-index: 60; padding: 0; background: rgba(8, 8, 14, .82); }
+.replay-shell {
+  width: min(1280px, 98vw); height: min(900px, 96vh); margin: 2vh auto;
+  background: #14141f; border: 1px solid #2c2c44; border-radius: 14px;
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.replay-top {
+  display: flex; align-items: center; gap: 16px; padding: 10px 16px;
+  border-bottom: 1px solid #26263c; background: #181826; flex-wrap: wrap;
+}
+.replay-title { font-weight: 700; font-size: 16px; display: flex; align-items: center; gap: 10px; }
+.replay-seed { color: #99a; font-weight: 400; font-size: 12px; }
+.replay-ver { color: #7fd1ff; font-size: 12px; font-weight: 400; display: flex; gap: 6px; align-items: center; }
+.legacy-tag { background: #5a4518; color: #ffd166; border-radius: 6px; padding: 1px 6px; font-style: normal; font-size: 11px; }
+.replay-verify { font-size: 12px; color: #99a; display: flex; gap: 8px; align-items: center; }
+.replay-verify .chk { font-style: normal; padding: 1px 7px; border-radius: 6px; }
+.replay-verify .chk.ok { background: #1f3d2a; color: #6fe39a; }
+.replay-verify .chk.legacy { background: #3d341f; color: #ffd166; }
+.replay-verify .chk.bad { background: #432025; color: #ff8e8e; }
+.replay-verify .iso { color: #778; margin-left: 4px; }
+.replay-verify.ok .iso { color: #6fe39a; }
+.replay-verify.bad { color: #ff8e8e; }
+
+.replay-body { flex: 1; display: flex; min-height: 0; }
+.replay-stage-wrap { flex: 1; min-width: 0; position: relative; overflow: auto; }
+.replay-side {
+  width: 320px; border-left: 1px solid #26263c; display: flex; flex-direction: column;
+  background: #16161f; min-height: 0;
+}
+.replay-current { padding: 12px 14px; border-bottom: 1px solid #26263c; }
+.rc-kind { color: #99a; font-size: 12px; display: flex; justify-content: space-between; }
+.rc-seq { color: #667; }
+.rc-title { font-size: 15px; font-weight: 700; margin-top: 4px; color: #e8ecff; }
+.rc-summary { color: #99a; font-size: 12px; margin-top: 4px; }
+.rc-result { margin-top: 8px; font-weight: 700; font-size: 13px; padding: 4px 8px; border-radius: 6px; display: inline-block; }
+.rc-result.won, .rc-result.run_won { background: #1f3d2a; color: #6fe39a; }
+.rc-result.lost { background: #432025; color: #ff8e8e; }
+
+.replay-filters { display: flex; gap: 6px; padding: 8px 10px; flex-wrap: wrap; border-bottom: 1px solid #26263c; }
+.fchip.on { background: #2c3f63; color: #cfe2ff; border-color: #4d73b8; }
+.replay-timeline { flex: 1; overflow-y: auto; padding: 6px; display: flex; flex-direction: column; gap: 4px; }
+.tl-item {
+  display: flex; align-items: center; gap: 8px; padding: 7px 9px; border-radius: 8px;
+  background: #1b1b28; border: 1px solid #28283d; text-align: left; width: 100%;
+}
+.tl-item:hover { background: #20203200; background: #202032; }
+.tl-item.cur { background: #243355; border-color: #4d73b8; box-shadow: inset 3px 0 0 #5aa9ff; }
+.tl-item.chk-mismatch { border-color: #8a3a3a; }
+.tl-item.chk-error { opacity: .7; }
+.tl-idx { color: #667; font-size: 11px; width: 22px; text-align: right; flex: none; }
+.tl-icon { flex: none; }
+.tl-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.tl-text b { font-size: 12.5px; font-weight: 600; color: #dde3ff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tl-text em { font-style: normal; color: #889; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tl-chk { flex: none; width: 18px; height: 18px; border-radius: 50%; font-size: 11px; display: inline-flex; align-items: center; justify-content: center; }
+.tl-chk.ok { background: #1f3d2a; color: #6fe39a; }
+.tl-chk.legacy { background: #3d341f; color: #ffd166; }
+.tl-chk.mismatch { background: #432025; color: #ff8e8e; }
+.tl-chk.error { background: #432025; color: #ff8e8e; }
+
+.replay-controls {
+  display: flex; align-items: center; gap: 8px; padding: 10px 14px;
+  border-top: 1px solid #26263c; background: #181826; flex-wrap: wrap;
+}
+.replay-scrub { flex: 1; min-width: 160px; accent-color: #5aa9ff; }
+.replay-counter { color: #99a; font-size: 12px; min-width: 64px; text-align: center; }
+.replay-speed { display: flex; gap: 4px; }
+.replay-speed .on { background: #2c3f63; color: #cfe2ff; border-color: #4d73b8; }
+.replay-shop-toggle { color: #99a; font-size: 12px; display: flex; gap: 4px; align-items: center; }
+.replay-progress { height: 3px; background: #20202f; }
+.replay-progress span { display: block; height: 100%; background: linear-gradient(90deg, #5aa9ff, #8f6bff); transition: width .15s; }
+
+.replay-warn {
+  position: absolute; left: 12px; right: 12px; bottom: 12px; z-index: 5;
+  background: rgba(120, 70, 10, .92); color: #ffe6b0; border: 1px solid #a6751d;
+  border-radius: 8px; padding: 8px 12px; font-size: 12.5px;
+}
+.replay-warn.legacy { background: rgba(70, 60, 20, .92); border-color: #8a7a2a; color: #ffe9a8; }
+
+.replay-stage { padding: 12px; }
+.replay-route-meta { display: flex; gap: 14px; color: #99a; font-size: 13px; margin-top: 10px; justify-content: center; }
+.replay-end { text-align: center; margin-top: 12px; font-weight: 700; font-size: 15px; }
+.replay-end.won { color: #6fe39a; } .replay-end.lost { color: #ff8e8e; }
+.replay-map .mnode.readonly { cursor: default; }
+.mnode.visited { opacity: .55; }
+.mnode.replay-cur { box-shadow: 0 0 0 2px #5aa9ff, 0 0 14px rgba(90,169,255,.5); }
+
+/* 回放里的只读卡片/货架/锻造实例 */
+.card.replayed { opacity: .85; cursor: default; }
+.replay-handbar { opacity: .95; }
+.replay-badge { color: #8fb6ff; font-size: 12px; border: 1px solid #33456b; border-radius: 6px; padding: 3px 8px; }
+.replay-overlay { position: static; background: transparent; padding: 0; margin-top: 10px; }
+.replay-panel { max-height: 52vh; overflow: auto; }
+.forgeinst.readonly, .shopitem.readonly, .roption.readonly { cursor: default; }
+.forgeinst.readonly.sel, .roption.readonly { border-color: #4d73b8; }
+.replaycard { max-width: 420px; text-align: center; }

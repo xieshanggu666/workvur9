@@ -7,6 +7,7 @@ import RewardView from './components/RewardView.jsx'
 import ForgeView from './components/ForgeView.jsx'
 import ShopView from './components/ShopView.jsx'
 import DeckView from './components/DeckView.jsx'
+import ReplayPlayer from './components/ReplayPlayer.jsx'
 
 export default function App() {
   const { view, setCards, cards, runId, setRunId, applyRun } = useStore()
@@ -16,6 +17,8 @@ export default function App() {
   const [err, setErr] = useState('')
   // 商店面板仅在本地收起：再次进入节点或点击“回到商店”重开（不发任何交易动作）
   const [shopDismissed, setShopDismissed] = useState(false)
+  // 整局回放：replayId 非 null 时覆盖全屏播放器（严格只读，与当前对局隔离）
+  const [replayId, setReplayId] = useState(null)
 
   useEffect(() => {
     api.cards().then(setCards).catch(() => {})
@@ -46,11 +49,17 @@ export default function App() {
       const run = await api.resume(resumeId)
       applyRun(run)
       setRunId(run.run_id)
+      setReplayId(null)
     } catch (e) {
       setErr(e.message)
     } finally {
       setLoading(false)
     }
+  }
+
+  function openReplay(id) {
+    const target = (id || runId || '').trim()
+    if (target) setReplayId(target)
   }
 
   async function refreshRun() {
@@ -90,6 +99,17 @@ export default function App() {
             <input value={resumeId} onChange={(e) => setResumeId(e.target.value)} placeholder="粘贴 run_id" />
             <button onClick={resume} disabled={loading}>续局</button>
           </div>
+          <div className="divider" />
+          <div className="fieldrow">
+            <span>回放 ID</span>
+            <input
+              value={resumeId}
+              onChange={(e) => setResumeId(e.target.value)}
+              placeholder="粘贴 run_id，逐步播放整局"
+              onKeyDown={(e) => e.key === 'Enter' && openReplay(resumeId)}
+            />
+            <button onClick={() => openReplay(resumeId)} disabled={loading || !resumeId}>🎬 整局回放</button>
+          </div>
           {err && <div className="error">{err}</div>}
         </div>
         {cards.length > 0 && <DeckView mode="extras" />}
@@ -112,6 +132,9 @@ export default function App() {
         <span>牌组 {view.deck.length}</span>
         <span className="sub">种子 {view.status === 'in_progress' && '#'}{view.seed === undefined ? '' : view.seed}</span>
         <button className="mini" onClick={refreshRun}>刷新</button>
+        <button className="mini" onClick={() => openReplay(runId)} title="逐步播放、暂停、跳转整局（只读）">
+          🎬 回放本局
+        </button>
         <button className="mini" onClick={newRun}>新局</button>
       </header>
 
@@ -147,6 +170,10 @@ export default function App() {
           {showShop && !ended && <ShopView view={view} onClose={() => setShopDismissed(true)} />}
         </div>
       </div>
+
+      {replayId && (
+        <ReplayPlayer runId={replayId} onClose={() => setReplayId(null)} />
+      )}
 
       {err && <div className="error toast">{err}</div>}
     </div>

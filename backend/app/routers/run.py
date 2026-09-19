@@ -18,7 +18,10 @@ def create_run(body: CreateRunRequest):
 
 @router.get("/{run_id}")
 def get_run(run_id: str):
-    return service.resume(run_id)
+    try:
+        return service.resume(run_id)
+    except service.InvalidAction as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.post("/{run_id}/act")
@@ -40,4 +43,7 @@ def resume(run_id: str):
 
 @router.get("/{run_id}/replay")
 def replay(run_id: str):
-    return service.replay(run_id)
+    try:
+        return service.replay(run_id)
+    except service.InvalidAction as e:
+        raise HTTPException(status_code=400, detail=str(e))

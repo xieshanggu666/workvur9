@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import random
 import uuid
@@ -13,7 +14,11 @@ from . import forging as forging_mod
 from . import shop as shop_mod
 from .cards import all_cards, get_card
 from .engine import Battle, _statuses_public
-from .forging import FORGE_COST, effective_card
+from .forging import FORGE_COST, effective_card, branch_name
+
+# 规则版本：引擎/结算/存档结构发生语义变化时递增。
+# 建局写入 run 状态、每个动作事件携带 ver；回放据此标记录制版本与旧日志兼容。
+RULES_VERSION = "2.0.0"
 
 # 初始牌组：卡牌 id 列表；建局时展开为独立实例（同名卡各持一份成长状态）
 START_DECK = ["strike", "strike", "strike", "strike", "guard", "guard", "guard"]
@@ -49,6 +54,7 @@ def _new_run_state(seed):
     deck_uids, instances = _make_instances(START_DECK)
     return {
         "seed": seed,
+        "rules_version": RULES_VERSION,
         "status": "in_progress",
         "position": "start",
         "max_health": 75,
@@ -104,6 +110,10 @@ def _migrate_state(run):
         run["card_instances"] = instances
         run["next_card_seq"] = len(instances) + 1
         changed = True
+    # 旧档补记当前规则版本（仅标注；旧动作日志仍按 legacy 处理不做哈希校验）
+    if "rules_version" not in run:
+        run["rules_version"] = RULES_VERSION
+        changed = True
     run.setdefault("forge_claimed", True)
     run.setdefault("shop", None)
     return changed
@@ -123,7 +133,9 @@ def create_run(seed=None):
     state = _new_run_state(seed)
     map_data = mapgen.generate_map(seed)
     db.insert_run(run_id, state["seed"], state["status"], state["position"], map_data, state)
-    db.append_event(run_id, 1, "create", {"seed": state["seed"]})
+    db.append_event(run_id, 1, "create", {
+        "seed": state["seed"], "ver": RULES_VERSION, "ckpt": state_checkpoint(state),
+    })
     return _public_view(state, map_data, run_id)
 
 
@@ -175,6 +187,11 @@ def _load_battle(run_state):
 
 # ---------- 行动 ----------
 def act(run_id, action):
+    """在线行动：校验 -> 纯状态推演（无 DB）-> 落库 + 追加动作日志。
+
+    纯推演部分（_apply_action）与回放共享同一条代码路径，保证“玩的时候”
+    和“回放重建”永远使用同一套规则；只有本函数允许写 runs / battle_events / profile。
+    """
     rec = load_run(run_id)
     if rec is None:
         raise InvalidAction("run not found")
@@ -186,31 +203,42 @@ def act(run_id, action):
         raise InvalidAction(f"run already ended ({run['status']})")
 
     a = action.get("action")
-    log = []
-    if a == "choose_node":
-        node = action["node"]
-        _choose_node(run, map_data, node)
-    elif a == "play":
-        log = _play(run, action["card"])
-    elif a == "end_turn":
-        log = _end_turn(run)
-    elif a == "claim_reward":
-        log = _claim_reward(run, action["option"])
-    elif a == "forge":
-        log = _forge(run, action.get("card"), action.get("branch"))
-    elif a == "shop_buy":
-        log = _shop_buy(run, action.get("kind"), action.get("sku"))
-    elif a == "shop_remove":
-        log = _shop_remove(run, action.get("card"))
-    else:
-        raise InvalidAction(f"unknown action {a}")
+    log = _apply_action(run, a, action, map_data, grant_unlocks=True)
 
     db.save_run(run_id, run["status"], run["position"], run)
     seq = db.next_seq(run_id)
-    db.append_event(run_id, seq, a, {"node": action.get("node"), "card": action.get("card"),
-                                     "option": action.get("option"), "branch": action.get("branch"),
-                                     "kind": action.get("kind"), "sku": action.get("sku")})
+    db.append_event(run_id, seq, a, {
+        "node": action.get("node"), "card": action.get("card"),
+        "option": action.get("option"), "branch": action.get("branch"),
+        "kind": action.get("kind"), "sku": action.get("sku"),
+        "ver": RULES_VERSION, "ckpt": state_checkpoint(run),
+    })
     return {"seq": seq, "log": log, "run": _public_view(run, map_data, run_id)}
+
+
+def _apply_action(run, a, action, map_data, grant_unlocks=False):
+    """对内存中的 run 状态执行一个动作（纯函数语义）。
+
+    map_data 由调用方持有（在线=存档地图；回放=按种子重新生成的同一地图）。
+    grant_unlocks=False（回放/模拟）时，战败也绝不触发 profile 解锁写入。
+    不读写数据库、不迁移存档——调用方负责准备好已迁移的状态。
+    """
+    if a == "choose_node":
+        _choose_node(run, map_data, action["node"])
+        return []
+    if a == "play":
+        return _play(run, action["card"], grant_unlocks=grant_unlocks)
+    if a == "end_turn":
+        return _end_turn(run, grant_unlocks=grant_unlocks)
+    if a == "claim_reward":
+        return _claim_reward(run, action["option"])
+    if a == "forge":
+        return _forge(run, action.get("card"), action.get("branch"))
+    if a == "shop_buy":
+        return _shop_buy(run, action.get("kind"), action.get("sku"))
+    if a == "shop_remove":
+        return _shop_remove(run, action.get("card"))
+    raise InvalidAction(f"unknown action {a}")
 
 
 def _choose_node(run, map_data, node):
@@ -278,12 +306,13 @@ def _battle_or_raise(run):
         raise InvalidAction("not in battle")
 
 
-def _play(run, card_ref):
+def _play(run, card_ref, grant_unlocks=True):
     _battle_or_raise(run)
     battle = _load_battle(run)
     if not battle.in_turn:
         raise InvalidAction("not player turn")
-    # card 为手牌引用（uid；旧档/裸测兼容卡牌 id）
+    # card 为手牌引用（uid；旧版 v1 动作日志记录的是裸卡牌 id）
+    card_ref = _resolve_hand_ref(run, battle, card_ref)
     if card_ref not in battle.hand:
         raise InvalidAction("hand does not contain that card")
     card = battle._card_def(card_ref)
@@ -294,10 +323,29 @@ def _play(run, card_ref):
         log = battle.play_card(card_ref)
     except ValueError as e:
         raise InvalidAction(str(e))
-    return _after_battle_step(run, battle, log)
+    return _after_battle_step(run, battle, log, grant_unlocks)
 
 
-def _end_turn(run):
+def _resolve_hand_ref(run, battle, ref):
+    """动作里的卡牌引用 -> 手牌引用。
+
+    新档/现版日志：uid，原样返回。
+    旧版日志（v1，卡牌实例化之前）：记录的是裸卡牌 id；按 run 级实例表把它
+    解析为手牌中同 id 的某个 uid（同 id 实例在未锻造时完全等价），实现旧日志回放。
+    """
+    if ref in battle.hand:
+        return ref
+    instances = run.get("card_instances", {})
+    if ref in instances:  # 卡在实例表但不在手牌（非法动作，保持原校验语义）
+        return ref
+    for uid in battle.hand:
+        inst = instances.get(uid)
+        if inst is not None and inst.get("id") == ref:
+            return uid
+    return ref  # 解析不到：交回上层的“手牌不存在”校验
+
+
+def _end_turn(run, grant_unlocks=True):
     _battle_or_raise(run)
     battle = _load_battle(run)
     run["reward_claimed"] = True
@@ -310,10 +358,10 @@ def _end_turn(run):
                     "extra": {"name": intent.get("name", "")}})
     # 敌方结算事件按结算顺序入日志，前端依序播放连锁动画
     log.extend(enemy_log)
-    return _after_battle_step(run, battle, log)
+    return _after_battle_step(run, battle, log, grant_unlocks)
 
 
-def _after_battle_step(run, battle, log):
+def _after_battle_step(run, battle, log, grant_unlocks=True):
     snap = battle.to_snapshot()
     result = battle.battle_result()
     run["health"] = battle.entities["player"]["hp"]
@@ -341,7 +389,9 @@ def _after_battle_step(run, battle, log):
         run["battle"] = None
         run["status"] = "lost"
         log.append({"result": "lost", "snapshot": snap})
-        _grant_unlock_on_loss(run)
+        # 仅在线路径发放失败解锁；回放/模拟（grant_unlocks=False）不写 profile
+        if grant_unlocks:
+            _grant_unlock_on_loss(run)
     return log
 
 
@@ -534,14 +584,231 @@ def resume(run_id):
     return _public_view(rec["state"], rec["map"], rec["id"])
 
 
+# ---------- 规则版本与校验点 ----------
+# 不参与状态校验的瞬时/派生字段：events_log 只用于事件叙述，不影响规则推演
+_CKPT_SKIP_KEYS = {"events_log"}
+
+
+def state_checkpoint(run):
+    """权威状态校验点：对完整 run 状态取稳定哈希（SHA-256 截断 16 位）。
+
+    回放每重演一步就与动作日志里记录的 ckpt 比对；不一致说明规则版本变化、
+    日志损坏或确定性被破坏（而不是悄悄播一份错误的历史）。
+    """
+    material = {k: v for k, v in run.items() if k not in _CKPT_SKIP_KEYS}
+    blob = json.dumps(material, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
+
+
 def replay(run_id):
+    """整局可交互回放。
+
+    从“建局初始状态”开始，按动作日志逐步调用与在线完全相同的纯推演函数
+    （_apply_action，grant_unlocks=False），为每个动作产出一帧：
+      - view：该动作完成后的完整只读视口（地图/战斗/锻造/商店，结构与 /resume 一致）
+      - events：该动作产生的结算事件（战斗动画逐条播放；锻造/交易结果同构）
+      - kind/title/summary：时间轴分组与人类可读描述
+      - result：战斗/整局在本步结束（won/lost/run_won）
+    校验：每步与日志记录的 ckpt 哈希比对；旧日志（无 ckpt/无 ver）标记 legacy
+    并跳过校验。整个回放只读内存与已持久化的日志，不写 runs/battle_events/profile，
+    战败不触发解锁奖励。
+    """
     rec = load_run(run_id)
     if rec is None:
         raise InvalidAction("run not found")
     seed = rec["state"]["seed"]
+    map_data = rec["map"]
     events = db.load_events(run_id)
-    # 从空 run 按事件日志确定性重演（引擎本身确定性；此处返回动作序列与关键状态）
-    return {"run_id": run_id, "seed": seed, "actions": events}
+
+    # 回放起点：重新构造建局时的初始状态（不读、不写、不迁移真实存档）
+    sim = _new_run_state(seed)
+    initial_ckpt = state_checkpoint(sim)
+
+    steps = []
+    checks = []          # 每步校验结果
+    legacy_steps = 0
+    skipped_errors = 0
+    versions = set()
+
+    for ev in events:
+        ver = (ev.get("payload") or {}).get("ver")
+        if ver:
+            versions.add(ver)
+        is_legacy = not ver
+        if is_legacy:
+            legacy_steps += 1
+        recorded = (ev.get("payload") or {}).get("ckpt")
+        a = ev["action"]
+        payload = ev.get("payload") or {}
+
+        log, error = [], None
+        if a == "create":
+            # 建局事件只携带种子；初始状态已在循环外构造，不产生状态变化
+            pass
+        else:
+            try:
+                log = _apply_action(sim, a, payload, map_data, grant_unlocks=False)
+            except Exception as e:  # 损坏/越权动作不抹掉整段回放：断在此步并标注
+                error = f"{type(e).__name__}: {e}"
+                skipped_errors += 1
+
+        actual = state_checkpoint(sim)
+        if error:
+            status = "error"
+        elif not recorded:
+            status = "legacy"          # 旧版日志无校验点：可播放但不保证逐位一致
+        elif recorded == actual:
+            status = "ok"
+        else:
+            status = "mismatch"
+        checks.append({"seq": ev["seq"], "action": a, "status": status,
+                       "recorded": recorded, "actual": actual})
+
+        # 事件与在线 /act 返回的 log 同构（含 snapshot 校正点），前端播放器可复用
+        # 同一套结算事件驱动；帧 view 本身已携带权威状态，跳转时直接落帧无需放动画。
+        anim_events = [dict(x) for x in log]
+        steps.append({
+            "seq": ev["seq"],
+            "action": a,
+            "payload": payload,
+            "kind": _step_kind(sim, a, payload, log),
+            "title": _step_title(sim, map_data, a, payload, log),
+            "summary": _step_summary(a, payload, log),
+            "events": anim_events,
+            "result": _step_result(log),
+            "view": _public_view(sim, map_data, run_id, include_unlocks=False),
+            "check": status,
+            "legacy": is_legacy,
+            "error": error,
+        })
+
+    recorded_versions = sorted(versions)
+    current = RULES_VERSION
+    final_match = all(c["status"] in ("ok", "legacy") for c in checks)
+    return {
+        # 兼容旧客户端：仍返回扁平动作序列与种子
+        "run_id": run_id,
+        "seed": seed,
+        "actions": events,
+        # 交互式回放
+        "rules_version": current,
+        "recorded_versions": recorded_versions,
+        "legacy": legacy_steps > 0 or not recorded_versions,
+        "initial": {"checkpoint": initial_ckpt},
+        "steps": steps,
+        "final_view": _public_view(sim, map_data, run_id, include_unlocks=False),
+        "verification": {
+            "ok": sum(c["status"] == "ok" for c in checks),
+            "legacy": sum(c["status"] == "legacy" for c in checks),
+            "mismatch": sum(c["status"] == "mismatch" for c in checks),
+            "error": sum(c["status"] == "error" for c in checks),
+            "final_match": final_match,
+            "checks": checks,
+            "skipped_errors": skipped_errors,
+        },
+        "isolated": True,  # 声明：本次回放无任何存档写入与解锁副作用
+    }
+
+
+def _step_result(log):
+    for x in reversed(log):
+        if isinstance(x, dict) and x.get("result"):
+            return x["result"]
+    return None
+
+
+def _step_kind(sim, action, payload, log):
+    if action == "choose_node":
+        return "battle_entry" if sim.get("in_battle") else "route"
+    if action in ("play", "end_turn"):
+        return "battle"
+    if action == "claim_reward":
+        return "reward"
+    if action == "forge":
+        return "forge"
+    if action in ("shop_buy", "shop_remove"):
+        return "trade"
+    if action == "create":
+        return "create"
+    return "other"
+
+
+def _node_label(map_data, node):
+    if not node:
+        return ""
+    nd = map_data["nodes"].get(node)
+    labels = {"encounter": "遭遇", "elite": "精英", "rest": "休息", "reward": "奖励",
+              "forge": "锻造", "shop": "商店", "boss": "首领", "start": "营地"}
+    return labels.get((nd or {}).get("type"), node)
+
+
+def _card_name(cid):
+    from .cards import CARDS
+    c = CARDS.get(cid)
+    return c["name"] if c else cid
+
+
+def _step_title(sim, map_data, action, payload, log):
+    if action == "create":
+        return "建局"
+    if action == "choose_node":
+        node = payload.get("node")
+        return f"前往{_node_label(map_data, node)}节点"
+    if action == "play":
+        inst = sim.get("card_instances", {}).get(payload.get("card"))
+        cid = inst.get("id") if inst else payload.get("card")
+        return f"打出「{_card_name(cid)}」"
+    if action == "end_turn":
+        for x in log:
+            if isinstance(x, dict) and x.get("action") == "enemy_turn":
+                who = x.get("extra", {}).get("name")
+                return f"结束回合 · 敌方行动：{who}" if who else "结束回合 · 敌方行动"
+        return "结束回合"
+    if action == "claim_reward":
+        for x in log:
+            if isinstance(x, dict) and x.get("reward_claimed"):
+                return f"领取奖励「{x['reward_claimed']}」"
+        return "领取奖励"
+    if action == "forge":
+        inst = sim.get("card_instances", {}).get(payload.get("card"))
+        cname = _card_name(inst["id"]) if inst else (payload.get("card") or "")
+        return f"锻造 {cname} · {branch_name(payload.get('branch'))}"
+    if action == "shop_buy":
+        return f"商店购买（{payload.get('sku')}）"
+    if action == "shop_remove":
+        return "商店移除卡牌"
+    return action
+
+
+def _step_summary(action, payload, log):
+    """时间轴上的简短状态变化描述（金币/牌组/战斗结果/交易）。"""
+    if action == "shop_buy" or action == "shop_remove":
+        tx = next((x.get("shop_tx") for x in log if isinstance(x, dict) and x.get("shop_tx")), None)
+        if tx:
+            return f"花费 {tx.get('price')}，余额 {tx.get('gold_left')}"
+    if action == "forge":
+        f = next((x.get("forged") for x in log if isinstance(x, dict) and x.get("forged")), None)
+        if f:
+            return f"花费 {FORGE_COST}，余额 {f.get('gold_left')}"
+    if action in ("play", "end_turn"):
+        r = _step_result(log)
+        if r == "won":
+            return "战斗胜利"
+        if r == "lost":
+            return "战斗失败"
+        if r == "run_won":
+            return "通关！"
+        dmg = sum(x.get("value", 0) for x in log
+                  if isinstance(x, dict) and x.get("action") in ("damage", "echo_damage"))
+        if dmg:
+            return f"结算 {len([x for x in log if isinstance(x, dict) and x.get('action')])} 个事件"
+    if action == "claim_reward":
+        for x in log:
+            if isinstance(x, dict) and x.get("reward_claimed"):
+                return f"获得「{x['reward_claimed']}」"
+    if action == "choose_node" and payload.get("node"):
+        return f"位置 → {payload['node']}"
+    return ""
 
 
 def _hand_public(run, bstate):
@@ -563,7 +830,8 @@ def _hand_public(run, bstate):
     return out
 
 
-def _public_view(run, map_data, run_id):
+def _public_view(run, map_data, run_id, include_unlocks=True):
+    """只读视口。include_unlocks=False（回放）时不读取 profile 库，省略解锁信息。"""
     reachable = map_data["routes"].get(run["position"], [])
     snap = None
     if run["in_battle"] and run["battle"]:
@@ -615,7 +883,7 @@ def _public_view(run, map_data, run_id):
         "battle": snap,
         "reachable": [map_data["nodes"][n] for n in reachable],
         "map": _map_public(map_data, run["position"]),
-        "unlocked_cards": get_profile_unlocked(),
+        "unlocked_cards": get_profile_unlocked() if include_unlocks else None,
         "truncated": bool(run["battle"]["truncated"]) if run["in_battle"] and run["battle"] else bool(run.get("truncated", False)),
     }
 
