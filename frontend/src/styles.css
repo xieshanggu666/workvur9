@@ -191,3 +191,86 @@ button.mini { font-size: 12px; padding: 4px 8px; }
 .shopdesc { color: #99a; font-size: 13px; text-align: left; }
 .shoptx { text-align: left; margin-top: 12px; }
 .shoptx ul { margin: 6px 0 0; padding-left: 18px; color: #99a; font-size: 12px; display: flex; flex-direction: column; gap: 4px; }
+/* ========== 可交互回放 ========== */
+.replay-overlay { z-index: 80; }
+.replaycard {
+  background: #1b1b28; border: 1px solid #34344e; border-radius: 14px;
+  padding: 18px 20px 16px; width: min(1080px, 96vw); max-height: 94vh; overflow: auto;
+  display: flex; flex-direction: column; gap: 10px; position: relative;
+}
+.rp-close { position: absolute; top: 12px; right: 14px; z-index: 5; }
+.rp-loading { padding: 48px; text-align: center; color: #99a; }
+.rp-head h2 { color: #ffd166; margin: 0; }
+.rp-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding-right: 110px; }
+.rp-badges { display: flex; gap: 6px; flex-wrap: wrap; }
+.rp-badge {
+  font-size: 11px; padding: 2px 8px; border-radius: 10px; background: #2b2b40;
+  border: 1px solid #3a3a55; color: #bbc; white-space: nowrap;
+}
+.rp-badge.ok { background: #1d3a28; border-color: #2f6b46; color: #7fe0a6; }
+.rp-badge.bad { background: #3d1c22; border-color: #7a2f38; color: #ff9aa6; }
+.rp-badge.warn { background: #3d3018; border-color: #7a5a24; color: #ffcf7d; }
+.rp-badge.legacy { background: #2a2640; border-color: #4a3f78; color: #b3a4ff; }
+.rp-badge.readonly { background: #16283a; border-color: #27506f; color: #7dc4ff; }
+
+.rp-warnings {
+  background: #2e2415; border: 1px solid #6e531f; border-radius: 8px;
+  padding: 8px 12px; font-size: 12px; color: #e7cf9a;
+}
+.rp-warnings ul { margin: 4px 0 0; padding-left: 18px; display: flex; flex-direction: column; gap: 2px; }
+
+.rp-stage {
+  background: #14141e; border: 1px solid #2b2b40; border-radius: 10px; padding: 10px;
+  min-height: 300px;
+}
+.replay-battle .phaser { max-height: 60vh; }
+.replay-mapstage { display: grid; grid-template-columns: 1.2fr .8fr; gap: 14px; align-items: start; }
+.rp-side { display: flex; flex-direction: column; gap: 10px; max-height: 62vh; overflow: auto; }
+.rp-line { margin: 4px 0; color: #dde; font-size: 14px; }
+.rp-line .hp { color: #7fe0a6; }
+.rp-line .gold { color: #ffd166; }
+.rp-sub { color: #889; font-size: 12px; margin: 4px 0; }
+.replay-deck { max-height: 30vh; }
+
+.mnode.onpath:not(.cur) { color: #8fbf9f; border-color: #3a6b4a; }
+.mnode.onpath .msub { color: #7fe0a6; }
+
+.rp-controls {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  background: #1d1d2b; border: 1px solid #2b2b40; border-radius: 10px; padding: 8px 12px;
+}
+.rp-scrub { flex: 1; min-width: 160px; }
+.rp-count { font-size: 12px; color: #99a; white-space: nowrap; font-variant-numeric: tabular-nums; }
+
+.rp-current { display: flex; align-items: center; gap: 10px; font-size: 14px; flex-wrap: wrap; }
+.rp-node { color: #778; font-size: 12px; margin-left: auto; }
+.rp-kind {
+  font-size: 11px; padding: 2px 8px; border-radius: 10px; background: #2b2b40; color: #bbc;
+}
+.rp-kind.route { background: #234; color: #9cf; }
+.rp-kind.battle { background: #422; color: #fa9; }
+.rp-kind.reward { background: #44311a; color: #ffd166; }
+.rp-kind.forge { background: #1d3b4a; color: #7fd1ff; }
+.rp-kind.shop { background: #173d30; color: #5be0b0; }
+
+.rp-timelinescroll {
+  display: flex; gap: 6px; overflow-x: auto; padding: 6px 2px;
+  background: #14141e; border: 1px solid #2b2b40; border-radius: 8px;
+}
+.rp-step {
+  flex: 0 0 auto; display: flex; align-items: center; gap: 6px;
+  background: #202030; border: 1px solid #2f2f46; font-size: 12px; padding: 5px 10px;
+  border-radius: 7px; color: #aab; max-width: 220px;
+}
+.rp-step .rp-idx { color: #667; font-size: 11px; font-variant-numeric: tabular-nums; }
+.rp-step .rp-steplabel { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rp-step .rp-dot { font-style: normal; font-size: 11px; }
+.rp-step .rp-dot.ok { color: #7fe0a6; }
+.rp-step .rp-dot.bad { color: #ff8a9b; }
+.rp-step.route { border-left: 2px solid #5aa9ff; }
+.rp-step.battle { border-left: 2px solid #e06a72; }
+.rp-step.reward { border-left: 2px solid #ffd166; }
+.rp-step.forge { border-left: 2px solid #7fd1ff; }
+.rp-step.shop { border-left: 2px solid #5be0b0; }
+.rp-step.cur { outline: 2px solid #ffd166; color: #fff; background: #2a2a40; }
+.rp-step.diverged { border-color: #b98a2e; }

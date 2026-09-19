@@ -11,6 +11,7 @@ from . import mapgen
 from . import rewards as rewards_mod
 from . import forging as forging_mod
 from . import shop as shop_mod
+from . import rules
 from .cards import all_cards, get_card
 from .engine import Battle, _statuses_public
 from .forging import FORGE_COST, effective_card
@@ -123,7 +124,7 @@ def create_run(seed=None):
     state = _new_run_state(seed)
     map_data = mapgen.generate_map(seed)
     db.insert_run(run_id, state["seed"], state["status"], state["position"], map_data, state)
-    db.append_event(run_id, 1, "create", {"seed": state["seed"]})
+    db.append_event(run_id, 1, "create", {"seed": state["seed"], "rule_version": rules.RULE_VERSION})
     return _public_view(state, map_data, run_id)
 
 
@@ -185,32 +186,49 @@ def act(run_id, action):
     if run["status"] != "in_progress":
         raise InvalidAction(f"run already ended ({run['status']})")
 
-    a = action.get("action")
-    log = []
-    if a == "choose_node":
-        node = action["node"]
-        _choose_node(run, map_data, node)
-    elif a == "play":
-        log = _play(run, action["card"])
-    elif a == "end_turn":
-        log = _end_turn(run)
-    elif a == "claim_reward":
-        log = _claim_reward(run, action["option"])
-    elif a == "forge":
-        log = _forge(run, action.get("card"), action.get("branch"))
-    elif a == "shop_buy":
-        log = _shop_buy(run, action.get("kind"), action.get("sku"))
-    elif a == "shop_remove":
-        log = _shop_remove(run, action.get("card"))
-    else:
-        raise InvalidAction(f"unknown action {a}")
+    # 纯状态推进：不写库；失败解锁（副作用）在落库之后执行
+    log = _apply_action(run, action, map_data=map_data)
 
     db.save_run(run_id, run["status"], run["position"], run)
     seq = db.next_seq(run_id)
-    db.append_event(run_id, seq, a, {"node": action.get("node"), "card": action.get("card"),
-                                     "option": action.get("option"), "branch": action.get("branch"),
-                                     "kind": action.get("kind"), "sku": action.get("sku")})
+    # 校验点：本动作落库后的状态哈希，供回放逐步比对
+    payload = {"node": action.get("node"), "card": action.get("card"),
+               "option": action.get("option"), "branch": action.get("branch"),
+               "kind": action.get("kind"), "sku": action.get("sku"),
+               "rule_version": rules.RULE_VERSION, "checkpoint": rules.state_hash(run)}
+    db.append_event(run_id, seq, action.get("action"), payload)
+    # 失败解锁只发生在“真实对局”的 act 路径；回放直接调用 _apply_action
+    # 纯推进、不会走到这里，因此回放中的战败不会写 profile、不会产生解锁奖励
+    if run["status"] == "lost":
+        _grant_unlock_on_loss(run)
     return {"seq": seq, "log": log, "run": _public_view(run, map_data, run_id)}
+
+
+def _apply_action(run, action, map_data=None):
+    """把一个合法动作应用到内存 run 状态（纯推进：不做任何持久化）。
+
+    实时对局与确定性回放共用本函数，保证两条路径规则完全一致。
+    choose_node 需要地图数据：实时行动由调用方传入；回放由重建器传入。
+    """
+    a = action.get("action")
+    if a == "choose_node":
+        if map_data is None:
+            raise InvalidAction("map data required for choose_node")
+        _choose_node(run, map_data, action["node"])
+        return []
+    if a == "play":
+        return _play(run, action["card"])
+    if a == "end_turn":
+        return _end_turn(run)
+    if a == "claim_reward":
+        return _claim_reward(run, action["option"])
+    if a == "forge":
+        return _forge(run, action.get("card"), action.get("branch"))
+    if a == "shop_buy":
+        return _shop_buy(run, action.get("kind"), action.get("sku"))
+    if a == "shop_remove":
+        return _shop_remove(run, action.get("card"))
+    raise InvalidAction(f"unknown action {a}")
 
 
 def _choose_node(run, map_data, node):
@@ -341,7 +359,8 @@ def _after_battle_step(run, battle, log):
         run["battle"] = None
         run["status"] = "lost"
         log.append({"result": "lost", "snapshot": snap})
-        _grant_unlock_on_loss(run)
+        # 注：失败解锁属于存档副作用，不在纯推进路径触发——
+        # 由 act() 落库后调用；回放（_apply_action）因此天然不写 profile
     return log
 
 
@@ -538,10 +557,8 @@ def replay(run_id):
     rec = load_run(run_id)
     if rec is None:
         raise InvalidAction("run not found")
-    seed = rec["state"]["seed"]
-    events = db.load_events(run_id)
-    # 从空 run 按事件日志确定性重演（引擎本身确定性；此处返回动作序列与关键状态）
-    return {"run_id": run_id, "seed": seed, "actions": events}
+    from .replay import build_replay
+    return build_replay(rec, db.load_events(run_id))
 
 
 def _hand_public(run, bstate):
@@ -563,7 +580,9 @@ def _hand_public(run, bstate):
     return out
 
 
-def _public_view(run, map_data, run_id):
+def _public_view(run, map_data, run_id, include_profile=True):
+    # include_profile=False：回放松口。不读取 profile 表，且不携带解锁信息，
+    # 从数据层面保证回放与“解锁奖励”隔离
     reachable = map_data["routes"].get(run["position"], [])
     snap = None
     if run["in_battle"] and run["battle"]:
@@ -615,7 +634,7 @@ def _public_view(run, map_data, run_id):
         "battle": snap,
         "reachable": [map_data["nodes"][n] for n in reachable],
         "map": _map_public(map_data, run["position"]),
-        "unlocked_cards": get_profile_unlocked(),
+        "unlocked_cards": get_profile_unlocked() if include_profile else None,
         "truncated": bool(run["battle"]["truncated"]) if run["in_battle"] and run["battle"] else bool(run.get("truncated", False)),
     }
 

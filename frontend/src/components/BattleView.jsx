@@ -3,6 +3,7 @@ import { api } from '../api'
 import { useStore } from '../store'
 import { bus } from '../phaser/battleBus'
 import { startPhaser, STATUS_ZH } from '../phaser/BattleScene.js'
+import { fmtEvent } from '../replay/format.js'
 
 export default function BattleView({ view }) {
   const mountRef = useRef(null)
@@ -129,7 +130,7 @@ export default function BattleView({ view }) {
       {log.length > 0 && (
         <div className="eventlog">
           {log.map((ev, i) => {
-            const txt = fmtEvent(ev)
+            const txt = fmtEvent(ev, STATUS_ZH)
             if (!txt) return null
             const cls = ev && ev.result ? 'ev result' : 'ev'
             return <span key={i} className={cls}>{txt}</span>
@@ -139,39 +140,4 @@ export default function BattleView({ view }) {
       {err && <div className="error">{err}</div>}
     </div>
   )
-}
-
-function fmtEvent(ev) {
-  if (!ev || typeof ev !== 'object') return ''
-  if (ev.result) {
-    if (ev.result === 'lost') return '💀 战败…'
-    if (ev.result === 'run_won') return '🏆 通关！'
-    return '🎉 胜利！'
-  }
-  if (ev.snapshot) return ''
-  const tgt = ev.target === 'player' ? '你' : '敌'
-  switch (ev.action) {
-    case 'enemy_turn':
-      return `— 敌方回合${ev.extra?.name ? `：${ev.extra.name}` : ''} —`
-    case 'damage':
-    case 'echo_damage':
-      return `${tgt} 受 ${ev.value} 伤害`
-    case 'gain_block':
-      return `${tgt} 获得 ${ev.value} 格挡`
-    case 'heal':
-      return `${tgt} 回复 ${ev.value}`
-    case 'draw':
-      return `抽 ${ev.value} 张牌`
-    case 'gain_energy':
-      return `能量 +${ev.value}`
-    case 'apply_status':
-    case 'set_status': {
-      const s = STATUS_ZH[ev.extra?.status] || ev.extra?.status || '状态'
-      return `${tgt} ${s} +${ev.value}`
-    }
-    case 'truncated':
-      return '⚠ 连锁被强制终止（触发上限）'
-    default:
-      return ''
-  }
 }

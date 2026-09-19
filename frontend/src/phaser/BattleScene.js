@@ -516,7 +516,9 @@ export default class BattleScene extends Phaser.Scene {
   }
 
   pause(ms) {
-    return new Promise((resolve) => this.time.delayedCall(ms, resolve))
+    // 回放可设置 speedMult（同时加快 tween 与定时停顿）
+    const mult = this.speedMult || 1
+    return new Promise((resolve) => this.time.delayedCall(Math.max(1, Math.round(ms / mult)), resolve))
   }
 }
 

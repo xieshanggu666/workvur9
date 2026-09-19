@@ -7,11 +7,14 @@ import RewardView from './components/RewardView.jsx'
 import ForgeView from './components/ForgeView.jsx'
 import ShopView from './components/ShopView.jsx'
 import DeckView from './components/DeckView.jsx'
+import ReplayPlayer from './replay/ReplayPlayer.jsx'
 
 export default function App() {
   const { view, setCards, cards, runId, setRunId, applyRun } = useStore()
   const [seed, setSeed] = useState('')
   const [resumeId, setResumeId] = useState('')
+  const [replayIdInput, setReplayIdInput] = useState('')
+  const [replayRunId, setReplayRunId] = useState(null)
   const [loading, setLoading] = useState(false)
   const [err, setErr] = useState('')
   // 商店面板仅在本地收起：再次进入节点或点击“回到商店”重开（不发任何交易动作）
@@ -90,6 +93,12 @@ export default function App() {
             <input value={resumeId} onChange={(e) => setResumeId(e.target.value)} placeholder="粘贴 run_id" />
             <button onClick={resume} disabled={loading}>续局</button>
           </div>
+          <div className="divider" />
+          <div className="fieldrow">
+            <span>回放 ID</span>
+            <input value={replayIdInput} onChange={(e) => setReplayIdInput(e.target.value)} placeholder="粘贴 run_id 观看整局回放" />
+            <button onClick={() => replayIdInput.trim() && setReplayRunId(replayIdInput.trim())} disabled={!replayIdInput.trim()}>▶ 回放</button>
+          </div>
           {err && <div className="error">{err}</div>}
         </div>
         {cards.length > 0 && <DeckView mode="extras" />}
@@ -112,6 +121,7 @@ export default function App() {
         <span>牌组 {view.deck.length}</span>
         <span className="sub">种子 {view.status === 'in_progress' && '#'}{view.seed === undefined ? '' : view.seed}</span>
         <button className="mini" onClick={refreshRun}>刷新</button>
+        <button className="mini" onClick={() => setReplayRunId(runId)}>🎬 回放本局</button>
         <button className="mini" onClick={newRun}>新局</button>
       </header>
 
@@ -149,6 +159,10 @@ export default function App() {
       </div>
 
       {err && <div className="error toast">{err}</div>}
+
+      {replayRunId && (
+        <ReplayPlayer runId={replayRunId} onClose={() => setReplayRunId(null)} />
+      )}
     </div>
   )
 }
